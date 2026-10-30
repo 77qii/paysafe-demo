@@ -1,5 +1,10 @@
-# Hosted build only (PAYSAFE_HOSTED=1). Local development keeps using
-# requirements.txt; nothing here is needed to run the demo against Hardhat.
+# Hosted build only. Local development keeps using requirements.txt; nothing
+# here is needed to run the demo against Hardhat.
+#
+# KEEP IN SYNC with the repository-root requirements.txt. The two are separate
+# literal lists on purpose: this file has to stand alone because container
+# deploys upload only the frontend/ directory, while Streamlit Cloud reads the
+# root file and does not follow nested "-r" includes.
 #
 # Deliberately NOT eth-tester[py-evm]: that extra pulls safe-pysha3, a C
 # extension that needs a compiler at install time. eth-hash already ships a
