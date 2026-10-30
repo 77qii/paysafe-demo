@@ -1,0 +1,16 @@
+[client]
+toolbarMode = "minimal"
+showErrorDetails = true
+
+[theme]
+base = "light"
+primaryColor = "#1d4ed8"
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f6f8fc"
+textColor = "#10233f"
+font = "sans serif"
+
+[server]
+headless = true
+# No fixed port: the host decides it (Streamlit Cloud injects one). Locally
+# Streamlit already defaults to 8501.

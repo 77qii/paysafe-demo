@@ -1,0 +1,10 @@
+node_modules/
+.npm-cache/
+artifacts/
+cache/
+typechain-types/
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+deployments/local.json

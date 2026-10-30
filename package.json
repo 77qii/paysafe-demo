@@ -1,0 +1,17 @@
+{
+  "name": "paysafe",
+  "version": "1.0.0",
+  "private": true,
+  "description": "PaySafe - Blockchain-Based Prepaid Consumer Protection (FTEC5520A Final Project Demo)",
+  "scripts": {
+    "compile": "hardhat compile",
+    "test": "hardhat test",
+    "node": "hardhat node",
+    "deploy": "hardhat run scripts/deploy.js --network localhost",
+    "demo": "hardhat run scripts/demo_cli.js"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^5.0.0",
+    "hardhat": "^2.22.17"
+  }
+}

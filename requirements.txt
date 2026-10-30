@@ -1,0 +1,3 @@
+# Dependencies are kept in one place; this file exists because Streamlit
+# Community Cloud only looks for requirements.txt at the repository root.
+-r frontend/requirements-hosted.txt
