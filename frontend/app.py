@@ -79,7 +79,15 @@ st.set_page_config(
 st.markdown(
     """
     <style>
-      .block-container { padding-top: 1.4rem; padding-bottom: 3rem; max-width: 1180px; }
+      /* Streamlit's header (menu / Share / star / edit) is a position:fixed
+         overlay about 3.75rem tall. A small padding-top let it sit on top of
+         the tab labels and clip their upper half, so reserve the header height
+         plus a little breathing room. */
+      .block-container {
+        padding-top: calc(3.75rem + 0.75rem);
+        padding-bottom: 3rem;
+        max-width: 1180px;
+      }
 
       /* ---------- top navigation: horizontal radio styled as tabs ---------- */
       div[data-testid="stRadioGroup"] {
