@@ -1,2 +1,18 @@
-web3==7.16.0
+# The one dependency list for this project.
+#
+# Streamlit Community Cloud installs the requirements.txt that sits next to the
+# main module, so this file is the one it reads (main module:
+# frontend/app.py). Keeping a second list at the repository root made the
+# platform pick between two files and it chose this one — which used to hold
+# only web3 + streamlit, so the hosted chain's eth-tester was never installed.
+#
+# eth-tester + py-evm are needed only for hosted builds (see chain_host.py).
+# They are harmless for the local Hardhat demo.
+#
+# Deliberately NOT eth-tester[py-evm]: that extra pulls safe-pysha3, a C
+# extension that needs a compiler at install time. eth-hash already ships a
+# working keccak backend, so the plain package is enough.
 streamlit==1.66.1
+web3==7.16.0
+eth-tester==0.14.0b1
+py-evm==0.12.1b1
