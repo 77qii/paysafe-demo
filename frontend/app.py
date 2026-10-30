@@ -141,11 +141,12 @@ st.markdown(
                  background: #eef3ff; color: #1d4ed8; }
 
       /* ---------- status bar ---------- */
-      .ps-status { display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+      .ps-status { display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
                    font-size: 0.82rem; color: #5b6f8a; margin-bottom: 2px; }
       .ps-status .live { display: inline-flex; align-items: center; gap: 7px; }
       .ps-status .live i { width: 7px; height: 7px; border-radius: 50%; background: #16a34a;
                            box-shadow: 0 0 0 3px rgba(22,163,74,.15); }
+      .ps-status .ps-sep { color: #c2ccdb; }
       .ps-status b { color: #22314a; font-weight: 600; font-variant-numeric: tabular-nums; }
 
       /* ---------- headline status cards ---------- */
@@ -313,7 +314,8 @@ def connect():
     return w3, registry, vault, accounts
 
 
-def send(w3, fn, sender, ok_message, extra_error_note=None, value=None):
+def send(w3, fn, sender, ok_message, extra_error_note=None, value=None,
+         error_title="Transaction Failed"):
     """Send a transaction, remember the outcome, and rerun the page."""
     tx_params = {"from": sender}
     if value is not None:
@@ -346,9 +348,12 @@ def send(w3, fn, sender, ok_message, extra_error_note=None, value=None):
         )
     except Exception as err:  # noqa: BLE001 - surface the revert reason to the audience
         reason = extract_reason(err)
-        text = f"**Transaction Failed**\n\n**{reason}**"
+        # Three lines, always in the same order, so the audience can read the
+        # failure without parsing a Python traceback: what happened, what the
+        # contract said, and why it matters.
+        text = f"**{error_title}**\n\n**{reason}**"
         if extra_error_note:
-            text += f"\n\n{extra_error_note}"
+            text += f"\n\n**{extra_error_note}**"
         st.session_state["flash"] = ("error", text)
     st.rerun()
 
@@ -501,7 +506,10 @@ def event_rows(rpc_url, deployment_path, from_block, latest_block):
     scan(vault, "RefundProcessed", "reg", "Regulator", lambda a: hkd(a["amount"]),
          lambda a: f"{hkd(a['amount'])} refunded to consumer")
 
-    rows.sort(key=lambda r: r["block"])
+    # Newest block first: the demo ends on this page, and the event that was
+    # just triggered has to be visible without scrolling. The sort is stable,
+    # so events mined into the same block keep their emission order.
+    rows.sort(key=lambda r: r["block"], reverse=True)
     return rows, None
 
 
@@ -802,8 +810,12 @@ def page_consumer(state, w3, registry, vault, accounts):
                 w3,
                 vault.functions.useSession(state["package_id"]),
                 state["consumer"],
-                "One session has been completed.\n\n"
-                f"{hkd(state['price_per_session'])} is now available to the merchant.",
+                # Spelled out in full: after this click the audience should be
+                # able to read off what changed on chain without looking at
+                # any other part of the page.
+                "**Session completed successfully.**\n\n"
+                f"**{hkd(state['price_per_session'])} has been released to the merchant.**\n\n"
+                f"Sessions Used: {state['sessions_used'] + 1} / {state['sessions_per_package']}",
             )
 
     if state["has_package"]:
@@ -885,6 +897,10 @@ def page_merchant(state, w3, registry, vault, accounts):
                 state["merchant"],
                 "Unexpected: the excess withdrawal succeeded.",
                 extra_error_note="The merchant cannot withdraw unused consumer funds.",
+                # This is the one failure case the demo is built around, so it
+                # gets the term the contract itself uses ("reverted") instead
+                # of the generic headline.
+                error_title="Transaction Reverted",
             )
     cap(
         "Withdrawable balance = released amount − already withdrawn. "
@@ -1058,7 +1074,7 @@ def page_regulator(state, w3, registry, vault, accounts):
 def page_activity(state, w3, registry, vault, accounts):
     page_header(
         "Activity Log",
-        "Every row below is a contract event. Block numbers form the audit trail.",
+        "Every row below is a contract event, newest first. Block numbers form the audit trail.",
     )
 
     from_block = min(_deployment_block("MerchantRegistry"), _deployment_block("PrepayVault"))
@@ -1149,15 +1165,16 @@ def main():
 
     # ---- compact status bar + demo info --------------------------------
     # Name the chain honestly: a hosted build runs one inside the app process,
-    # not a node on the presenter's machine.
+    # not a node on the presenter's machine. Only the two facts that prove the
+    # chain is live belong up here — vault balance and reserve ratio are shown
+    # in full on the pages below, so repeating them here just adds noise.
     chain_label = "In-process chain" if HOSTED else "Local chain"
     st.markdown(
         f"""
         <div class="ps-status">
           <span class="live"><i></i>{chain_label}</span>
+          <span class="ps-sep">·</span>
           <span>Block <b>#{state['block']}</b></span>
-          <span>Vault <b>{hkd(state['vault_balance'])}</b></span>
-          <span>Reserve <b>{reserve_ratio(state)}%</b></span>
         </div>
         """,
         unsafe_allow_html=True,

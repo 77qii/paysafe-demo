@@ -14,6 +14,7 @@ Run this on a freshly deployed chain: it expects no merchant registered yet.
 """
 
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -87,7 +88,10 @@ def main():
     for i in range(3):
         at = click(at, "Use One Session")
         check(f"step 3 session {i + 1} completed",
-              any("One session has been completed" in s.value for s in at.success),
+              any("Session completed successfully." in s.value for s in at.success),
+              str([s.value for s in at.success]))
+        check(f"step 3 session {i + 1} names the released amount",
+              any("has been released to the merchant." in s.value for s in at.success),
               str([s.value for s in at.success]))
     body = texts(at)
     check("step 3 shows 3 / 12 sessions", "3 / 12" in body, body[:300])
@@ -100,6 +104,7 @@ def main():
     err = " ".join(e.value for e in at.error)
     check("step 4 excess withdrawal rejected", "Reserve funds are locked." in err, err)
     check("step 4 explains why", "cannot withdraw unused consumer funds" in err, err)
+    check("step 4 says Transaction Reverted", "Transaction Reverted" in err, err)
 
     # ---------------------------------------------------------------- step 5
     at = click(at, "Withdraw Available Funds")
@@ -132,6 +137,13 @@ def main():
                      "Merchant withdrawal completed", "Merchant marked as closed",
                      "refunded to consumer"]:
         check(f"activity log contains '{expected}'", expected in log)
+
+    # The demo ends on this page, so the newest event has to be at the top.
+    log_rows = [m.value for m in at.markdown if 'class="ps-log"' in m.value]
+    blocks = [int(b) for b in re.findall(r"Block #(\d+)", " ".join(log_rows))]
+    check("activity log is newest first", blocks == sorted(blocks, reverse=True), str(blocks))
+    check("activity log top row is the latest event",
+          "refunded to consumer" in log_rows[0], log_rows[0][:200])
 
     print("=" * 70)
     print(f"{len(passed)} passed, {len(failed)} failed")
