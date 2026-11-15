@@ -203,6 +203,10 @@ Steps 1, 5 and 9 are the three failure cases from the brief: no licence, over-wi
 double refund. Step 1 has to run before step 2; it can be replayed at any time by revoking the
 licence (Regulator → *Exception path*).
 
+There is a fourth rejection kept **off** the route, because it answers a permission question
+rather than a business one: Merchant → *Exception path* → **Test Completing a Session**. The
+merchant tries to mark a session delivered itself and the contract refuses (see §8).
+
 The **Activity Log** page replays every step from on-chain events. Each row names the role and
 the wallet that role actually uses (`Regulator → Merchant 0x2B5A…`), and clicking a row opens
 the full transaction hash and gas used.
@@ -330,6 +334,17 @@ so the chain is left as it was found.
 | `protectedBalance(uint256 id)` | anyone | consumer money still in escrow |
 | `previewRefund(uint256 id)` | anyone | refund amount if closed now |
 
+### Who can release money
+
+`useSession()` is the only function that raises `releasedAmount`, and it requires
+`msg.sender == package.consumer`. No merchant-side or regulator-side function marks a session as
+delivered, so a merchant cannot release its own money by claiming twelve sessions —
+`vault.connect(merchant).useSession(id)` reverts `Only the consumer can use a session.` It is
+covered by a test and can be shown live from the Merchant page → *Exception path*.
+
+The trade-off is deliberate: the consumer is the sole source of truth for delivery. No oracle, no
+counter-signature, nothing to explain beyond one `require`.
+
 ### Failure cases enforced on-chain
 
 | Case | Trigger | Revert reason |
@@ -345,3 +360,9 @@ so the chain is left as it was found.
 Deliberately out of scope (per the project brief): oracles, Chainlink, NFTs, DAOs, zero-knowledge
 proofs, public testnets, real HKD payments, multiple package types, arbitration, databases and
 login systems. Everything runs offline against a local Hardhat node — no external API is called.
+
+One limitation that comes with the consumer-confirmed model, stated up front: if the consumer never
+confirms a delivered session, the merchant is not paid and the money stays in the vault. There is no
+arbitration and no timeout release; the only exit is the regulator closing the merchant, which
+refunds the consumer. Adding an oracle or a dispute window is exactly the kind of scope the brief
+puts outside this project.

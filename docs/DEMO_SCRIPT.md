@@ -207,6 +207,17 @@ contracts are compiled Solidity, every state change is a mined transaction with 
 number and gas, and the UI reads all of it back from the chain — no numbers are stored in the app.
 What is *not* real is the money: 1 HKD is mapped to 1e15 wei so HK$6,000 is 6 test ETH.
 
+**"What if the merchant marks twelve sessions complete itself?"**
+It cannot. `useSession` requires `msg.sender` to be the consumer, and there is no merchant-side
+function that releases money. Show it live: Merchant → *Exception path* → *Test Completing a
+Session* → `Transaction Reverted / Only the consumer can use a session.` It is off the timed route
+because it answers a permission question, not a business step.
+
+**"And if the consumer simply refuses to confirm?"**
+Then the merchant is not paid and the money stays in escrow. There is no arbitration and no
+timeout release in this contract; the exit is the regulator closing the merchant, which refunds the
+consumer. That is the honest limit of a consumer-confirmed model without an oracle.
+
 **"Why doesn't `useSession` transfer the money immediately?"**
 It could. Separating "earned" from "withdrawn" makes the invariant explicit and lets the
 merchant batch withdrawals; the safety property comes from the same subtraction either way.

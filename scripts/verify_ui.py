@@ -129,6 +129,16 @@ def main():
     check("step 5 explains why", "cannot withdraw unused consumer funds" in err, err)
     check("step 5 says Transaction Reverted", "Transaction Reverted" in err, err)
 
+    # The permission question: can the merchant mark sessions delivered itself?
+    body = texts(at)
+    check("merchant page says sessions are consumer-only",
+          "no function that can release funds" in body, body[:300])
+    at = click(at, "Test Completing a Session")
+    err = " ".join(e.value for e in at.error)
+    check("merchant cannot complete a session",
+          "Only the consumer can use a session." in err, err)
+    check("merchant session attempt says Reverted", "Transaction Reverted" in err, err)
+
     # ---------------------------------------------------------------- step 6
     at = click(at, "Withdraw Available Funds")
     check("step 6 withdrawal succeeded",

@@ -1046,6 +1046,13 @@ def page_merchant(state, w3, registry, vault, accounts):
             ]
         )
 
+    # The question this page invites is "what stops me from marking 12 sessions
+    # complete myself?" — answer it next to the number it would change.
+    cap(
+        "Released Amount only grows when the consumer records a session. "
+        "This role has no function that can release funds."
+    )
+
     st.write("")
     avail_hkd = int(state["available"] // HKD)
     amount_hkd = 0
@@ -1116,6 +1123,30 @@ def page_merchant(state, w3, registry, vault, accounts):
         st.write("")
         st.markdown("#### Where the money actually is")
         fund_bar(state)
+
+    st.write("")
+    with st.expander("Exception path · complete a session as the merchant"):
+        cap(
+            "`useSession` requires msg.sender to be the consumer, so the merchant cannot "
+            "release its own money by claiming it delivered twelve sessions. Press it to "
+            "see the contract refuse."
+        )
+        if action(
+            "Test Completing a Session",
+            None if state["has_package"] else "Buy a package first.",
+            key="merchant_session",
+        ):
+            send(
+                w3,
+                vault.functions.useSession(state["package_id"]),
+                state["merchant"],
+                "Unexpected: the merchant completed a session.",
+                extra_error_note=(
+                    "Only the consumer can confirm a delivered session, so the merchant "
+                    "cannot release money to itself."
+                ),
+                error_title="Transaction Reverted",
+            )
 
 
 def page_regulator(state, w3, registry, vault, accounts):
