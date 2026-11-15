@@ -68,6 +68,7 @@ paysafe/
 │   └── PrepayVault.sol           # escrow, session release, withdrawal, closure, refund
 ├── scripts/
 │   ├── deploy.js                 # deploys both contracts, writes deployments/local.json
+│   ├── export_contracts.js       # regenerates frontend/contracts.json from the artifacts
 │   ├── demo_cli.js               # full business flow with no UI (Phase 2 verification)
 │   ├── verify_ui.py              # drives the real Streamlit app end to end
 │   └── verify_confirm.py         # verifies the two-click confirmation gate
@@ -75,6 +76,9 @@ paysafe/
 │   └── paysafe.test.js           # 21 Hardhat tests
 ├── frontend/
 │   ├── app.py                    # Streamlit demo UI (all text in English)
+│   ├── chain_host.py             # in-process chain for the hosted build only
+│   ├── contracts.json            # compiled abi + bytecode used by chain_host.py
+│   ├── start.sh                  # entry point for the hosted build
 │   └── requirements.txt
 ├── docs/
 │   ├── DEMO_SCRIPT.md            # 3-minute presenter script with expected on-screen text
@@ -134,6 +138,18 @@ PrepayVault      deployed to: 0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512
 Deployment written to        : .../deployments/local.json
 ```
 
+Both the deploy script and the UI honour `PAYSAFE_RPC`, so you can target a node on another
+port without editing anything:
+
+```bash
+PAYSAFE_RPC=http://127.0.0.1:8546 npx hardhat run scripts/deploy.js --network localhost
+PAYSAFE_RPC=http://127.0.0.1:8546 streamlit run frontend/app.py
+```
+
+> Redeploying is also the fastest way to get a clean demo state: new contract instances start
+> empty, so you do not need to restart the node between rehearsals. From inside the app, the
+> **Reset demo chain** button in *Demo information* does the same thing (see §6).
+
 **Terminal 3 — the UI**
 
 ```bash
@@ -144,26 +160,57 @@ streamlit run frontend/app.py
 
 Open <http://localhost:8501>.
 
+### The two run modes
+
+| Mode | Chain | Used for |
+|---|---|---|
+| Local (default) | Hardhat node on `127.0.0.1:8545` | the course demo, fully offline |
+| Hosted (`PAYSAFE_HOSTED=1`) | EVM inside the app process (py-evm via eth-tester) | a single-port deployment with no second process |
+
+Hosted mode boots `frontend/chain_host.py`, which deploys the contracts from
+`frontend/contracts.json` instead of talking to a node. **That file is a compiled artifact**, so
+refresh it after any contract change:
+
+```bash
+npx hardhat compile
+npx hardhat run scripts/export_contracts.js
+```
+
+The local demo never imports `chain_host.py`, so it works with plain `web3` + `streamlit`.
+
+Both modes say the same thing on screen about the chain they are on — *Hardhat node* or
+*In-process EVM (py-evm)* — and the **Demo information** panel explains which one is running.
+Nothing in the UI calls the hosted chain "Hardhat": Hardhat compiled the bytecode, it is not the
+node.
+
 ---
 
 ## 6. The 3-minute demo route
 
 | Step | Page | Action | Expected result |
 |---|---|---|---|
-| 1 | Regulator | **Register Merchant** | `Merchant registered successfully.` / License: **Licensed** |
-| 2 | Consumer | **Buy Package** | `Package purchased successfully.` / Total Paid HK$6,000, Protected HK$6,000, Reserve Ratio 100% |
-| 3 | Consumer | **Use One Session** × 3 | Sessions 3/12, Released HK$1,500, Protected HK$4,500, Reserve Ratio 75% |
-| 4 | Merchant | **Test Excess Withdrawal** | `Transaction Failed` / `Reserve funds are locked.` / `The merchant cannot withdraw unused consumer funds.` |
-| 5 | Merchant | **Withdraw Available Funds** | `Withdrawal successful.` / `Amount: HK$1,500` |
-| 6 | Regulator | **Mark Merchant as Closed** | `Merchant has been marked as closed.` |
-| 7 | Regulator | **Process Consumer Refund** | `Consumer refund processed successfully.` / `Refund Amount: HK$4,500` |
-| 8 | Regulator | **Process Consumer Refund** again | `Transaction Failed` / `Refund has already been processed.` |
+| 1 | Consumer | **Test Unlicensed Purchase** | `Transaction Reverted` / `Merchant is not licensed.` — nothing is paid |
+| 2 | Regulator | **Register Merchant** | `Merchant registered successfully.` / License: **Licensed** |
+| 3 | Consumer | **Buy Package** | `Package purchased successfully.` / Total Paid HK$6,000, Protected HK$6,000, Reserve Ratio 100% |
+| 4 | Consumer | **Use One Session** × 3 | Sessions 3/12, Released HK$1,500, Protected HK$4,500, Reserve Ratio 75% |
+| 5 | Merchant | **Test Excess Withdrawal** | `Transaction Reverted` / `Reserve funds are locked.` / `The merchant cannot withdraw unused consumer funds.` |
+| 6 | Merchant | **Withdraw Available Funds** | `Withdrawal successful.` / `Amount: HK$1,500` |
+| 7 | Regulator | **Mark Merchant as Closed** | `Merchant has been marked as closed.` |
+| 8 | Regulator | **Process Consumer Refund** | `Consumer refund processed successfully.` / `Refund Amount: HK$4,500` |
+| 9 | Regulator | **Process Consumer Refund** again | `Transaction Failed` / `Refund has already been processed.` |
 
-The **Activity Log** page replays every step from on-chain events.
+Steps 1, 5 and 9 are the three failure cases from the brief: no licence, over-withdrawal,
+double refund. Step 1 has to run before step 2; it can be replayed at any time by revoking the
+licence (Regulator → *Exception path*).
 
-> **Two clicks for irreversible actions.** *Mark Merchant as Closed*, *Process Consumer Refund*
-> and *Revoke Merchant License* ask for confirmation first — the first click only shows
-> "Click … once more to confirm". This applies to step 8 as well: two clicks to see the rejection.
+The **Activity Log** page replays every step from on-chain events. Each row names the role and
+the wallet that role actually uses (`Regulator → Merchant 0x2B5A…`), and clicking a row opens
+the full transaction hash and gas used.
+
+> **Two clicks for irreversible actions.** *Mark Merchant as Closed*, *Process Consumer Refund*,
+> *Revoke Merchant License* and *Reset demo chain* ask for confirmation first — the first click
+> only shows "Click … once more to confirm". This applies to step 9 as well: two clicks to see
+> the rejection.
 
 Pages can also be opened directly: `http://localhost:8501/?page=Merchant`
 
@@ -171,7 +218,19 @@ A word-for-word presenter script with timings is in [`docs/DEMO_SCRIPT.md`](docs
 
 ### Reset before a live demo
 
-State lives on the local chain, so restart the node and redeploy:
+The demo ends in a terminal state (package closed, refund processed), and the chain keeps that
+state until someone resets it. There are two ways back to Step 1:
+
+**1. The button (works on both the local and the hosted build).**
+
+**Demo information** (top of any page) → **Reset demo chain** → click twice. This deploys a new
+`MerchantRegistry` + `PrepayVault` and starts from zero: no licence, no package, no events. The
+Activity Log only scans from the new deployment block, so the previous run never shows up.
+
+On the hosted link this is the only reset available, and it is **shared**: the in-process chain
+belongs to the server process, so every visitor sees the same reset.
+
+**2. The terminal (local run only), if you want the whole node restarted.**
 
 ```bash
 # Ctrl-C in terminal 1, then
@@ -180,7 +239,11 @@ npx hardhat node
 npx hardhat run scripts/deploy.js --network localhost
 ```
 
-Then reload the browser tab.
+Then reload the browser tab. Restarting the node also re-mines block numbers from 0, which is
+the cleanest state if you plan to show the log.
+
+> Why the hosted build has no auto-reset: the chain is deliberately shared, so an automatic
+> reset would wipe the page under anyone else watching. Resetting is an explicit action.
 
 ---
 
@@ -208,13 +271,14 @@ Drives the real `frontend/app.py` through Streamlit's AppTest harness — clicki
 buttons a presenter would click, against the running node.
 
 ```bash
-# needs terminal 1 (node) and a freshly deployed chain
+# needs terminal 1 (node) only — the harness resets the chain itself
 cd paysafe
 source .venv/bin/activate
 python scripts/verify_ui.py
 ```
 
-`verify_ui.py` runs with `PAYSAFE_NO_CONFIRM=1` so each step is a single click.
+`verify_ui.py` starts by pressing **Reset demo chain**, so it does not care what the previous
+run left behind, and it runs with `PAYSAFE_NO_CONFIRM=1` so each step is a single click.
 
 ### d) Confirmation gate (two-click actions)
 

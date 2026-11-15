@@ -1,5 +1,7 @@
 [client]
-toolbarMode = "minimal"
+# Projector mode: no Fork / Deploy / developer toolbar on screen. The CSS in
+# app.py hides the last bits this mode still renders.
+toolbarMode = "viewer"
 showErrorDetails = true
 
 [theme]

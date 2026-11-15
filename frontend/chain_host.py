@@ -11,7 +11,11 @@ Activated only when PAYSAFE_HOSTED=1. Local runs never import this module.
 
 The chain is built once per server process and shared by every browser session,
 so the audience and the presenter look at the same live state. That is the point
-of a demo link, and it also means the app must not be restarted mid-presentation.
+of a demo link. Because the state is shared, a finished run stays finished until
+someone rebuilds the chain: `reset()` throws the current chain away and deploys
+a new pair of contracts, which is what the "Reset demo chain" button in the app
+calls. The default PyEVM accounts are derived from a fixed test mnemonic, so
+accounts[0..2] keep the same addresses after a reset and the roles stay stable.
 """
 
 from __future__ import annotations
@@ -91,6 +95,19 @@ def _ensure():
         if _chain["w3"] is None:
             _chain["w3"], _chain["deployment"] = _build()
         return _chain["w3"], _chain["deployment"]
+
+
+def reset() -> dict:
+    """Discard the current chain and return a freshly deployed, empty one.
+
+    Every session that is open right now keeps rendering from its own copy of
+    the old Web3 object until it reruns; the caller is responsible for clearing
+    Streamlit's caches and rerunning the page.
+    """
+    with _lock:
+        w3, deployment = _build()
+        _chain["w3"], _chain["deployment"] = w3, deployment
+        return deployment
 
 
 def shared_web3() -> Web3:

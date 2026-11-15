@@ -31,6 +31,7 @@ All user-visible text is English.
 import json
 import os
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 
 import streamlit as st
@@ -79,6 +80,14 @@ st.set_page_config(
 st.markdown(
     """
     <style>
+      /* Projector mode: no Streamlit chrome. config.toml already sets
+         client.toolbarMode = "viewer" (no Fork / Deploy); these rules catch the
+         last pieces a shared link still renders, so a screen recording shows
+         the product and nothing else. */
+      [data-testid="stToolbar"], [data-testid="stDecoration"], #MainMenu {
+        display: none !important;
+      }
+
       /* Streamlit's header (menu / Share / star / edit) is a position:fixed
          overlay about 3.75rem tall. A small padding-top let it sit on top of
          the tab labels and clip their upper half, so reserve the header height
@@ -184,6 +193,7 @@ st.markdown(
       .ps-legend i.p { background: #1d4ed8; }
       .ps-legend i.a { background: #16a34a; }
       .ps-legend i.w { background: #94a3b8; }
+      .ps-legend i.r { background: #d97706; }
       .ps-cap { font-size: 0.82rem; color: #5b6f8a; line-height: 1.6; margin: 6px 0 2px; }
 
       /* ---------- regulator stepper ---------- */
@@ -218,6 +228,19 @@ st.markdown(
       .ps-dot.reg { background: #1d4ed8; }
       .ps-dot.con { background: #16a34a; }
       .ps-dot.mer { background: #8a5a00; }
+      /* a log row is a <details>: click it to see the full transaction hash */
+      .ps-log details > summary { list-style: none; cursor: pointer; }
+      .ps-log details > summary::-webkit-details-marker { display: none; }
+      .ps-log details > summary::marker { content: ""; }
+      .ps-tx { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+               font-size: 0.74rem; color: #7b8ba1; }
+      .ps-caret { color: #9aa8bb; font-size: 0.78rem; display: inline-block;
+                  margin-left: 7px; transition: transform .12s ease; }
+      .ps-log details[open] .ps-caret { transform: rotate(90deg); }
+      .ps-txline { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+                   font-size: 0.76rem; color: #5b6f8a; margin-top: 6px;
+                   background: #f7f9fc; border: 1px solid #eef1f6; border-radius: 7px;
+                   padding: 6px 9px; word-break: break-all; }
 
       div[data-testid="stMarkdownContainer"] table { width: 100%; }
       @media (max-width: 780px) {
@@ -312,6 +335,67 @@ def connect():
     if len(accounts) < 3:
         raise RuntimeError("The local node must expose at least 3 unlocked accounts.")
     return w3, registry, vault, accounts
+
+
+CONTRACTS_SPEC = Path(__file__).resolve().parent / "contracts.json"
+
+
+def _deploy_local(w3, accounts):
+    """Deploy a fresh contract pair on the local node and rewrite the deployment file.
+
+    Same two constructors as scripts/deploy.js, run from the same compiled
+    bytecode (frontend/contracts.json), so a reset never needs the Hardhat
+    toolchain to be installed. The old contracts stay on chain, unused; the
+    Activity Log only scans from the new deployment block, so they never show.
+    """
+    spec = json.loads(CONTRACTS_SPEC.read_text(encoding="utf-8"))
+    regulator = accounts[0]
+
+    def deploy(name, args):
+        factory = w3.eth.contract(abi=spec[name]["abi"], bytecode=spec[name]["bytecode"])
+        tx_hash = factory.constructor(*args).transact({"from": regulator, "gas": 8_000_000})
+        receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=60)
+        return receipt["contractAddress"], receipt["blockNumber"]
+
+    registry_address, registry_block = deploy("MerchantRegistry", [regulator])
+    vault_address, vault_block = deploy("PrepayVault", [registry_address])
+
+    deployment = {
+        "network": "localhost",
+        "chainId": w3.eth.chain_id,
+        "deployedAt": datetime.now(timezone.utc).isoformat(),
+        "accounts": {
+            "regulator": regulator,
+            "merchant": accounts[1],
+            "consumer": accounts[2],
+        },
+        "contracts": {
+            "MerchantRegistry": {
+                "address": registry_address,
+                "blockNumber": registry_block,
+                "abi": spec["MerchantRegistry"]["abi"],
+            },
+            "PrepayVault": {
+                "address": vault_address,
+                "blockNumber": vault_block,
+                "abi": spec["PrepayVault"]["abi"],
+            },
+        },
+    }
+    DEPLOYMENT_FILE.parent.mkdir(parents=True, exist_ok=True)
+    DEPLOYMENT_FILE.write_text(json.dumps(deployment, indent=2), encoding="utf-8")
+    return deployment
+
+
+def reset_demo(w3=None, accounts=None):
+    """Put the demo back to Step 1: new contracts, no licence, no package."""
+    if HOSTED:
+        deployment = chain_host.reset()
+        get_web3.clear()
+        return deployment
+    if w3 is None or accounts is None:
+        w3, _registry, _vault, accounts = connect()
+    return _deploy_local(w3, accounts)
 
 
 def send(w3, fn, sender, ok_message, extra_error_note=None, value=None,
@@ -443,7 +527,16 @@ def _deployment_block(contract_name: str) -> int:
 
 @st.cache_data(ttl=3, show_spinner=False)
 def event_rows(rpc_url, deployment_path, from_block, latest_block):
-    """Return (rows, error). rows = [dict(block, event, kind, actor, amount, text), ...]"""
+    """Return (rows, error).
+
+    rows = [dict(block, tx, gas, event, kind, actor, amount, text), ...]
+
+    `actor` names the role that sent the transaction together with the wallet
+    that role actually uses: "Regulator → Merchant 0x2B5A…". Older builds put
+    the event's address next to a fixed role label, so MerchantRegistered read
+    "Regulator 0x2B5A…" (the merchant's address) and RefundProcessed read
+    "Regulator 0x6813…" (the consumer's) — wrong twice over.
+    """
     try:
         # Same backend the rest of the page uses; rpc_url/deployment_path only
         # participate in the cache key on a local run.
@@ -460,51 +553,82 @@ def event_rows(rpc_url, deployment_path, from_block, latest_block):
             abi=d["contracts"]["PrepayVault"]["abi"],
         )
         per_session = vault.functions.PRICE_PER_SESSION().call()
+        # packageId -> consumer. SessionCompleted carries no address, so this is
+        # how its row names the right wallet instead of a bare "Consumer".
+        owners = {}
+        try:
+            for pid in range(1, vault.functions.packageCount().call() + 1):
+                owners[pid] = vault.functions.getPackage(pid).call()[0]
+        except Exception:  # noqa: BLE001 - attribution is cosmetic, never fatal
+            owners = {}
     except Exception as err:  # noqa: BLE001
         return [], f"Could not open the deployment file: {err}"
 
     rows = []
 
-    def scan(contract, name, kind, actor_role, amount_fn, text_fn):
+    def scan(contract, name, kind, actor_fn, amount_fn, text_fn):
         try:
             logs = contract.events[name].get_logs(
                 from_block=from_block, to_block=latest_block
             )
         except Exception as err:  # noqa: BLE001 - report, never swallow
             rows.append(
-                {"block": 0, "event": name, "kind": "err", "actor": "", "amount": "",
-                 "text": f"Could not read {name}: {err}"}
+                {"block": 0, "tx": "", "gas": None, "event": name, "kind": "err",
+                 "actor": "", "amount": "", "text": f"Could not read {name}: {err}"}
             )
             return
         for log in logs:
             a = log["args"]
-            addr = a.get("consumer") or a.get("merchant") or ""
             rows.append(
                 {
                     "block": log["blockNumber"],
+                    "tx": Web3.to_hex(log["transactionHash"]),
+                    "gas": None,
                     "event": name,
                     "kind": kind,
-                    "actor": f"{actor_role} {short(addr)}" if addr else actor_role,
+                    "actor": actor_fn(a),
                     "amount": amount_fn(a),
                     "text": text_fn(a),
                 }
             )
 
-    scan(registry, "MerchantRegistered", "reg", "Regulator", lambda a: "—",
-         lambda a: f"Merchant registered — {short(a['merchant'])} licensed by regulator")
-    scan(registry, "MerchantRevoked", "reg", "Regulator", lambda a: "—",
+    # The regulator is the actor on the three regulator-initiated events; the
+    # merchant or consumer named on the right of the arrow is the affected
+    # wallet, not the sender.
+    scan(registry, "MerchantRegistered", "reg",
+         lambda a: f"Regulator → Merchant {short(a['merchant'])}", lambda a: "—",
+         lambda a: f"Merchant registered — {short(a['merchant'])} licensed by the regulator")
+    scan(registry, "MerchantRevoked", "reg",
+         lambda a: f"Regulator → Merchant {short(a['merchant'])}", lambda a: "—",
          lambda a: f"Merchant license revoked — {short(a['merchant'])}")
-    scan(vault, "PackagePurchased", "con", "Consumer", lambda a: hkd(a["amount"]),
+    scan(vault, "PackagePurchased", "con",
+         lambda a: f"Consumer {short(a['consumer'])}", lambda a: hkd(a["amount"]),
          lambda a: f"Package purchased — {hkd(a['amount'])} locked in escrow (package #{a['packageId']})")
-    scan(vault, "SessionCompleted", "con", "Consumer", lambda a: hkd(per_session),
+    scan(vault, "SessionCompleted", "con",
+         lambda a: f"Consumer {short(owners[a['packageId']])}"
+                   if owners.get(a["packageId"]) else "Consumer",
+         lambda a: hkd(per_session),
          lambda a: f"Session #{a['sessionNumber']} completed — {hkd(per_session)} released, "
                    f"{hkd(a['protectedBalance'])} still protected")
-    scan(vault, "FundsWithdrawn", "mer", "Merchant", lambda a: hkd(a["amount"]),
+    scan(vault, "FundsWithdrawn", "mer",
+         lambda a: f"Merchant {short(a['merchant'])}", lambda a: hkd(a["amount"]),
          lambda a: f"Merchant withdrawal completed — {hkd(a['amount'])} paid out")
-    scan(vault, "MerchantMarkedClosed", "reg", "Regulator", lambda a: "—",
-         lambda a: "Merchant marked as closed by regulator")
-    scan(vault, "RefundProcessed", "reg", "Regulator", lambda a: hkd(a["amount"]),
+    scan(vault, "MerchantMarkedClosed", "reg",
+         lambda a: f"Regulator → Merchant {short(a['merchant'])}", lambda a: "—",
+         lambda a: f"Merchant marked as closed — package #{a['packageId']} refund path opened")
+    scan(vault, "RefundProcessed", "reg",
+         lambda a: f"Regulator → Consumer {short(a['consumer'])}", lambda a: hkd(a["amount"]),
          lambda a: f"{hkd(a['amount'])} refunded to consumer")
+
+    # Gas turns a row into a receipt the audience can check. Best effort: a
+    # missing receipt must not cost the row.
+    for r in rows:
+        if not r["tx"]:
+            continue
+        try:
+            r["gas"] = w3.eth.get_transaction_receipt(r["tx"])["gasUsed"]
+        except Exception:  # noqa: BLE001
+            r["gas"] = None
 
     # Newest block first: the demo ends on this page, and the event that was
     # just triggered has to be visible without scrolling. The sort is stable,
@@ -582,11 +706,17 @@ def status_cards(state):
 
 
 def fund_bar(state, show_total=True):
-    """Three-segment bar: protected / withdrawable / already paid out."""
+    """One bar for the whole HK$6,000: protected / withdrawable / paid out / refunded.
+
+    The four segments always add up to what the consumer prepaid, so no slice of
+    the money is ever unaccounted for. After a refund the bar used to show only
+    "paid out" and let the refunded part disappear; it now has its own segment.
+    """
     withdrawn = state["withdrawn"]
     available = state["available"]
     protected = state["protected"]
-    total = withdrawn + available + protected
+    refunded_amt = (state["total_paid"] - state["released"]) if state["refunded"] else 0
+    total = withdrawn + available + protected + refunded_amt
     if total <= 0:
         st.markdown('<div class="ps-bar"></div>', unsafe_allow_html=True)
         cap("No funds have entered the vault yet.")
@@ -594,7 +724,12 @@ def fund_bar(state, show_total=True):
 
     # One gradient with hard stops: no sub-pixel seam between segments.
     stops, acc = [], 0.0
-    for value, colour in ((protected, "#1d4ed8"), (available, "#16a34a"), (withdrawn, "#94a3b8")):
+    for value, colour in (
+        (protected, "#1d4ed8"),
+        (available, "#16a34a"),
+        (withdrawn, "#94a3b8"),
+        (refunded_amt, "#d97706"),
+    ):
         if value <= 0:
             continue
         width = value * 100 / total
@@ -610,13 +745,32 @@ def fund_bar(state, show_total=True):
         legend.append(f'<span><i class="a"></i>Withdrawable {hkd(available)}</span>')
     if withdrawn > 0:
         legend.append(f'<span><i class="w"></i>Paid out {hkd(withdrawn)}</span>')
+    if refunded_amt > 0:
+        legend.append(f'<span><i class="r"></i>Refunded {hkd(refunded_amt)}</span>')
     st.markdown(f'<div class="ps-legend">{"".join(legend)}</div>', unsafe_allow_html=True)
-    if show_total:
-        cap(
-            f"Total prepaid {hkd(state['total_paid'])} — the vault contract holds "
-            f"{hkd(state['vault_balance'])}; the merchant can withdraw {hkd(available)} of it, "
-            f"and the other {hkd(protected)} does not exist as a withdrawable balance."
+
+    if not show_total:
+        return
+    if state["refunded"]:
+        text = (
+            f"Total prepaid {hkd(state['total_paid'])}: "
+            f"{hkd(withdrawn)} was earned by completed sessions and paid out to the merchant, "
+            f"{hkd(refunded_amt)} went back to the consumer."
         )
+        if available > 0:
+            text += f" The vault still holds {hkd(available)}, which the merchant can withdraw."
+        else:
+            text += " The vault is empty — nothing is left on either side."
+    else:
+        text = (
+            f"Total prepaid {hkd(state['total_paid'])}: "
+            f"{hkd(protected)} is still protected for the consumer, "
+            f"{hkd(state['released'])} has been released by completed sessions, "
+            f"of which {hkd(withdrawn)} has been paid out. "
+            f"The merchant can withdraw at most {hkd(available)} — the protected part is not "
+            f"the merchant's money, so it never becomes a withdrawable balance."
+        )
+    cap(text)
 
 
 def action(label, reason=None, primary=False, key=None, confirm=False):
@@ -668,9 +822,11 @@ def page_home(state, w3, registry, vault, accounts):
 
     if not state["has_package"]:
         st.info(
-            "**Step 1** — Go to **Regulator** and register the merchant.  \n"
-            "**Step 2** — Go to **Consumer** and buy the HK$6,000 package.  \n"
-            "The money then sits in the vault contract, not in the merchant's account.",
+            "**Step 1** — On **Consumer**, press *Test Unlicensed Purchase*: the vault refuses "
+            "money from a merchant the regulator has not licensed yet.  \n"
+            "**Step 2** — On **Regulator**, register the merchant.  \n"
+            "**Step 3** — Back on **Consumer**, buy the HK$6,000 package. The money then sits "
+            "in the vault contract, not in the merchant's account.",
             icon="👉",
         )
         st.write("")
@@ -718,15 +874,21 @@ def page_home(state, w3, registry, vault, accounts):
             """
 | Step | Page | Action |
 |---|---|---|
-| 1 | Regulator | Register Merchant |
-| 2 | Consumer | Buy Package |
-| 3 | Consumer | Use One Session × 3 |
-| 4 | Merchant | Test Excess Withdrawal → must fail |
-| 5 | Merchant | Withdraw Available Funds |
-| 6 | Regulator | Mark Merchant as Closed |
-| 7 | Regulator | Process Consumer Refund |
-| 8 | Regulator | Process Consumer Refund again → must fail |
+| 1 | Consumer | Test Unlicensed Purchase → must fail |
+| 2 | Regulator | Register Merchant |
+| 3 | Consumer | Buy Package |
+| 4 | Consumer | Use One Session × 3 |
+| 5 | Merchant | Test Excess Withdrawal → must fail |
+| 6 | Merchant | Withdraw Available Funds |
+| 7 | Regulator | Mark Merchant as Closed |
+| 8 | Regulator | Process Consumer Refund |
+| 9 | Regulator | Process Consumer Refund again → must fail |
             """
+        )
+        cap(
+            "Three rejection paths, one per failure case in the brief: no licence, "
+            "over-withdrawal, double refund. Step 1 is optional — it must run before "
+            "step 2, and it can be replayed after revoking the licence."
         )
 
 
@@ -772,7 +934,7 @@ def page_consumer(state, w3, registry, vault, accounts):
         )
 
     st.write("")
-    b1, b2, _ = st.columns([1, 1, 1.6])
+    b1, b2, b3 = st.columns([1, 1, 1.2])
     with b1:
         if action(
             "Buy Package",
@@ -817,6 +979,35 @@ def page_consumer(state, w3, registry, vault, accounts):
                 f"**{hkd(state['price_per_session'])} has been released to the merchant.**\n\n"
                 f"Sessions Used: {state['sessions_used'] + 1} / {state['sessions_per_package']}",
             )
+    with b3:
+        # The third rejection path from the brief: a merchant that is not on the
+        # register cannot take prepaid money at all. The button stays enabled
+        # only while that is true, so it is pressable on a fresh chain and again
+        # after the regulator revokes the licence.
+        if action(
+            "Test Unlicensed Purchase",
+            None if not state["licensed"] else (
+                "The merchant is licensed — this path only fires before registration "
+                "or after the licence is revoked."
+            ),
+            key="unlicensed",
+        ):
+            send(
+                w3,
+                vault.functions.buyPackage(state["merchant"]),
+                state["consumer"],
+                "Unexpected: the unlicensed purchase succeeded.",
+                extra_error_note=(
+                    "The registry gate runs before any money moves — "
+                    "nothing was paid and nothing entered the vault."
+                ),
+                value=state["package_price"],
+                error_title="Transaction Reverted",
+            )
+    cap(
+        "Buy Package sends HK$6,000 to the vault, but only to a licensed merchant. "
+        "The licence check is inside the contract, not in this page."
+    )
 
     if state["has_package"]:
         st.write("")
@@ -870,11 +1061,25 @@ def page_merchant(state, w3, registry, vault, accounts):
 
     b1, b2, _ = st.columns([1, 1, 1.2])
     with b1:
+        # Why the button is unavailable has to match what the page above says:
+        # once the released money has been taken out, "nothing has been
+        # released yet" is flatly contradicted by "Released Amount HK$2,000".
+        if not state["has_package"]:
+            withdraw_reason = "Buy a package first."
+        elif state["released"] == 0:
+            withdraw_reason = "Nothing has been released yet — no session has been completed."
+        elif state["available"] == 0:
+            withdraw_reason = (
+                f"All {hkd(state['released'])} released so far has already been withdrawn."
+            )
+        elif amount_hkd <= 0:
+            withdraw_reason = "The withdrawable amount is below HK$1."
+        else:
+            withdraw_reason = None
+
         if action(
             "Withdraw Available Funds",
-            None if (state["has_package"] and amount_hkd > 0) else (
-                "Buy a package first." if not state["has_package"] else "Nothing has been released yet."
-            ),
+            withdraw_reason,
             primary=True,
             key="withdraw",
         ):
@@ -1074,7 +1279,7 @@ def page_regulator(state, w3, registry, vault, accounts):
 def page_activity(state, w3, registry, vault, accounts):
     page_header(
         "Activity Log",
-        "Every row below is a contract event, newest first. Block numbers form the audit trail.",
+        "Every row is a contract event, newest first. Click a row for the full transaction hash.",
     )
 
     from_block = min(_deployment_block("MerchantRegistry"), _deployment_block("PrepayVault"))
@@ -1095,16 +1300,25 @@ def page_activity(state, w3, registry, vault, accounts):
     for r in real:
         text = r["text"].replace("$", "&#36;")
         amount = r["amount"].replace("$", "&#36;")
+        tx = r.get("tx") or ""
+        tx_short = f"Tx {tx[:10]}…{tx[-6:]}" if tx else "Tx —"
+        gas = f" · gas {r['gas']:,}" if r.get("gas") else ""
         st.markdown(
             f'<div class="ps-log">'
+            f"<details>"
+            f"<summary>"
             f'<div class="ps-log-top">'
             f'<span class="ps-ev">{r["event"]}</span>'
             f'<span class="ps-blk">Block #{r["block"]}</span>'
+            f'<span class="ps-tx">{tx_short}</span>'
             f'<span class="ps-actor"><span class="ps-dot {r["kind"]}"></span>{r["actor"]}</span>'
-            f'<span class="ps-amt">{amount}</span>'
-            f'</div>'
+            f'<span class="ps-amt">{amount}<span class="ps-caret"> ▸</span></span>'
+            f"</div>"
             f'<div class="ps-log-bot">{text}</div>'
-            f'</div>',
+            f"</summary>"
+            f'<div class="ps-txline">Tx {tx} · block #{r["block"]}{gas}</div>'
+            f"</details>"
+            f"</div>",
             unsafe_allow_html=True,
         )
 
@@ -1168,7 +1382,7 @@ def main():
     # not a node on the presenter's machine. Only the two facts that prove the
     # chain is live belong up here — vault balance and reserve ratio are shown
     # in full on the pages below, so repeating them here just adds noise.
-    chain_label = "In-process chain" if HOSTED else "Local chain"
+    chain_label = "In-process EVM (py-evm)" if HOSTED else "Hardhat node"
     st.markdown(
         f"""
         <div class="ps-status">
@@ -1186,10 +1400,21 @@ def main():
             f"**Merchant** `{state['merchant']}`  \n"
             f"**Consumer** `{state['consumer']}`"
         )
-        st.caption(
-            "Roles are fixed to Hardhat accounts[0..2] so the CLI, the tests and this UI "
-            "always agree on who is who."
-        )
+        # One description of the chain, and it has to be the true one: the
+        # hosted build never starts a Hardhat node, so it must not borrow the
+        # word "Hardhat" for anything except the compiler that produced the
+        # bytecode.
+        if HOSTED:
+            st.caption(
+                "This build runs a real EVM inside the app process — py-evm through "
+                "eth-tester — and deploys the same Solidity bytecode Hardhat compiled. "
+                "Roles are accounts[0..2] of that chain; no external node is involved."
+            )
+        else:
+            st.caption(
+                "This build sends every transaction to a Hardhat node at 127.0.0.1:8545. "
+                "Roles are accounts[0..2], the same indexes the CLI and the tests use."
+            )
         st.checkbox(
             "Confirm destructive actions",
             value=not NO_CONFIRM,
@@ -1200,6 +1425,25 @@ def main():
         if st.button("Refresh chain state", use_container_width=True):
             st.cache_data.clear()
             st.rerun()
+
+        st.markdown("---")
+        if action("Reset demo chain", key="reset_chain", confirm=True):
+            try:
+                with st.spinner("Deploying a fresh contract pair…"):
+                    reset_demo(w3, accounts)
+                st.cache_data.clear()
+                st.session_state["flash"] = (
+                    "success",
+                    "**Demo reset.** Fresh contracts on a clean chain — the merchant is "
+                    "unlicensed and no package exists, so Step 1 is ready.",
+                )
+            except Exception as err:  # noqa: BLE001
+                st.session_state["flash"] = ("error", f"**Reset failed**\n\n{err}")
+            st.rerun()
+        cap(
+            "Deploys a new MerchantRegistry + PrepayVault and starts from zero. "
+            "Every visitor shares this chain, so a reset is visible to all of them."
+        )
 
     st.write("")
     show_flash()

@@ -10,16 +10,21 @@ Every quoted line is the exact text that appears on screen.
 - Terminal 3: `streamlit run frontend/app.py` is running, browser on <http://localhost:8501>
 - Chain is fresh: no merchant registered yet
 
+**Reset if it is not fresh.** Open **Demo information** (top of any page) → **Reset demo chain** →
+click twice. It deploys a new contract pair and starts from zero: no licence, no package, no
+events. On the hosted link this is the only way to reset, and it is shared by everyone watching.
+Restarting the node and redeploying also works locally, and additionally renumbers blocks from 0.
+
 Two things that will otherwise make you think the UI is broken:
 
-1. **Three buttons need two clicks.** *Mark Merchant as Closed*, *Process Consumer Refund* and
-   *Revoke Merchant License* are irreversible, so the first click only shows
+1. **Four buttons need two clicks.** *Mark Merchant as Closed*, *Process Consumer Refund*,
+   *Revoke Merchant License* and *Reset demo chain* are irreversible, so the first click only shows
    "Click **…** once more to confirm. This writes an irreversible on-chain state change."
    Click the same button again to actually send the transaction.
 2. **Every success message ends with a transaction line** (`Tx 0x… · block #N · gas …`).
    The quoted text below is the first line; the transaction line is proof it really hit the chain.
 
-Total: ~3 minutes. Steps 4 and 8 are the two moments that matter — slow down there.
+Total: ~3 minutes. Steps 1, 5 and 9 are the three rejection paths — slow down there.
 
 ---
 
@@ -39,7 +44,28 @@ Sessions Used**. They stay on every page, so the audience can watch the money mo
 
 ---
 
-## 0:20 — Step 1: Register Merchant (15s)
+## 0:20 — Step 1: Purchase Without a Licence (15s) — **rejection path 1**
+
+**Consumer → Test Unlicensed Purchase**
+
+> "Before we even license anyone: can the merchant take a prepayment while it is not on the
+> register? The consumer has HK$6,000 ready and presses the button."
+
+Screen:
+
+```
+Transaction Reverted
+
+Merchant is not licensed.
+The registry gate runs before any money moves — nothing was paid and nothing entered the vault.
+```
+
+> "The refusal comes from the contract, not from this page. There is no state where unlicensed
+> money is sitting in escrow waiting to be sorted out."
+
+---
+
+## 0:35 — Step 2: Register Merchant (15s)
 
 **Regulator → Register Merchant**
 
@@ -49,7 +75,7 @@ Screen: `Merchant registered successfully.` — License: **Licensed**, Business 
 
 ---
 
-## 0:35 — Step 2: Buy Package (20s)
+## 0:50 — Step 3: Buy Package (20s)
 
 **Consumer → Buy Package**
 
@@ -60,7 +86,7 @@ Screen: Total Paid **HK$6,000**, Released **HK$0**, Protected **HK$6,000**, Rese
 
 ---
 
-## 0:55 — Step 3: Use Three Sessions (30s)
+## 1:10 — Step 4: Use Three Sessions (25s)
 
 **Consumer → Use One Session** ×3
 
@@ -72,7 +98,7 @@ Screen: Sessions **3 / 12**, Released **HK$1,500**, Protected **HK$4,500**, Rese
 
 ---
 
-## 1:25 — Step 4: Excess Withdrawal (35s) — **key moment**
+## 1:35 — Step 5: Excess Withdrawal (30s) — **rejection path 2, key moment**
 
 **Merchant → Test Excess Withdrawal**
 
@@ -82,7 +108,7 @@ Screen: Sessions **3 / 12**, Released **HK$1,500**, Protected **HK$4,500**, Rese
 Screen:
 
 ```
-Transaction Failed
+Transaction Reverted
 
 Reserve funds are locked.
 The merchant cannot withdraw unused consumer funds.
@@ -92,9 +118,13 @@ The merchant cannot withdraw unused consumer funds.
 > withdrawable balance to take. `releasedAmount` is HK$1,500, `withdrawnAmount` is zero, so the
 > maximum the contract will pay out is HK$1,500 — anything above that reverts."
 
+Note: this one is titled *Transaction Reverted*, like step 1; the double-refund in step 9 is
+titled *Transaction Failed*. The project brief (§11) prints *Transaction Failed* for this screen —
+same meaning, the contract simply reverts.
+
 ---
 
-## 2:00 — Step 5: Normal Withdrawal (20s)
+## 2:05 — Step 6: Normal Withdrawal (20s)
 
 **Merchant → Withdraw Available Funds**
 
@@ -104,11 +134,12 @@ The **Amount to withdraw (HKD)** field is pre-filled with the full available amo
 Leave it as it is and press the button.
 
 Screen: `Withdrawal successful.` — Amount: **HK$1,500**. Available to Withdraw drops to **HK$0**,
-Protected stays **HK$4,500**.
+Protected stays **HK$4,500**, and the button now says
+"All HK$1,500 released so far has already been withdrawn."
 
 ---
 
-## 2:20 — Step 6: Merchant Closes (15s)
+## 2:25 — Step 7: Merchant Closes (15s)
 
 **Regulator → Mark Merchant as Closed** — *click twice* (first click asks for confirmation)
 
@@ -119,7 +150,7 @@ Screen: `Merchant has been marked as closed.` — Business Status: **Closed**
 
 ---
 
-## 2:35 — Step 7: Refund (15s)
+## 2:40 — Step 8: Refund (15s)
 
 **Regulator → Process Consumer Refund** — *click twice*
 
@@ -129,9 +160,12 @@ Screen: `Merchant has been marked as closed.` — Business Status: **Closed**
 Screen: `Consumer refund processed successfully.` — Refund Amount: **HK$4,500**.
 Protected Funds → **HK$0**.
 
+The bar under it now reads **Protected HK$0 · Paid out HK$1,500 · Refunded HK$4,500** — all
+HK$6,000 accounted for.
+
 ---
 
-## 2:50 — Step 8: Double Refund (10s) — **second key moment**
+## 2:55 — Step 9: Double Refund (10s) — **rejection path 3**
 
 **Regulator → Process Consumer Refund** again — *click twice* (the first click only asks to
 confirm; the second one sends the transaction and gets rejected)
@@ -148,18 +182,30 @@ Refund has already been processed.
 
 ---
 
-## 3:00 — Close (10s)
+## 3:05 — Close (10s)
 
 **Activity Log** page.
 
 > "Every step you just watched is an on-chain event — registered, purchased, three sessions,
-> one rejected withdrawal, one successful withdrawal, closure, refund. The whole protection
-> mechanism is about 270 lines of Solidity across two contracts, with no oracle and no trusted
-> third party holding the money."
+> one rejected withdrawal, one successful withdrawal, closure, refund. Each row names the role and
+> the wallet that role uses, and if you open it you get the transaction hash and gas used."
+
+Click any row to show `Tx 0x…` and gas. Point out `Regulator → Consumer 0x6813…BA69` on the refund
+row — the actor is the regulator, the money went to the consumer's wallet.
+
+> "The whole protection mechanism is about 270 lines of Solidity across two contracts, with no
+> oracle and no trusted third party holding the money."
 
 ---
 
 ## If someone asks…
+
+**"Is this a real blockchain or a simulation?"**
+The EVM is real, the chain is disposable. On the laptop it is a Hardhat node on 127.0.0.1:8545;
+on the hosted link it is py-evm running inside the app process (eth-tester). Either way the
+contracts are compiled Solidity, every state change is a mined transaction with a hash, block
+number and gas, and the UI reads all of it back from the chain — no numbers are stored in the app.
+What is *not* real is the money: 1 HKD is mapped to 1e15 wei so HK$6,000 is 6 test ETH.
 
 **"Why doesn't `useSession` transfer the money immediately?"**
 It could. Separating "earned" from "withdrawn" makes the invariant explicit and lets the

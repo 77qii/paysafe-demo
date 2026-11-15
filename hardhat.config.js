@@ -18,7 +18,9 @@ module.exports = {
       },
     },
     localhost: {
-      url: "http://127.0.0.1:8545",
+      // Override with PAYSAFE_RPC to target a node on a different port,
+      // e.g. PAYSAFE_RPC=http://127.0.0.1:8546 npx hardhat run scripts/deploy.js --network localhost
+      url: process.env.PAYSAFE_RPC || "http://127.0.0.1:8545",
       chainId: 31337,
     },
   },

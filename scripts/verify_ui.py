@@ -2,15 +2,16 @@
 End-to-end verification of the Streamlit demo.
 
 This drives the real app script (frontend/app.py) through Streamlit's AppTest
-harness, clicking the same buttons a presenter would click, against the live
-local Hardhat node. Every step asserts the on-screen text.
+harness, clicking the same buttons a presenter would click, against whichever
+backend the app picks (local Hardhat node, or the in-process chain when
+PAYSAFE_HOSTED=1).
 
 Prerequisites:
-    npx hardhat node                                   # terminal 1
-    npx hardhat run scripts/deploy.js --network localhost   # terminal 2
-    python scripts/verify_ui.py                        # terminal 3 (fresh chain)
+    npx hardhat node                          # terminal 1, only for the local run
+    python scripts/verify_ui.py               # terminal 2
 
-Run this on a freshly deployed chain: it expects no merchant registered yet.
+The first thing the harness does is press "Reset demo chain", so it no longer
+matters what state the chain was left in: the run starts from zero every time.
 """
 
 import os
@@ -57,6 +58,10 @@ def texts(at):
     return " ".join(parts)
 
 
+def captions(at):
+    return " ".join(c.value for c in at.caption)
+
+
 def main():
     at = AppTest.from_file(APP, default_timeout=60)
     at.run()
@@ -70,65 +75,93 @@ def main():
             print("   ", e.value)
         sys.exit(1)
 
-    # ---------------------------------------------------------------- step 1
-    at.radio[0].set_value("Regulator").run()
-    at = click(at, "Register Merchant")
-    check("step 1 merchant registered", any("Merchant registered" in s.value for s in at.success),
+    # ---------------------------------------------------------------- reset
+    # Self-contained run: whatever the previous demo left behind is discarded.
+    at = click(at, "Reset demo chain")
+    check("reset deploys a fresh chain",
+          any("Demo reset." in s.value for s in at.success),
           str([s.value for s in at.success]))
+
+    at.radio[0].set_value("Home").run()
+    home = " ".join(i.value for i in at.info) + texts(at)
+    check("reset returns Home to Step 1", "Test Unlicensed Purchase" in home, home[:300])
+
+    # ---------------------------------------------------------------- step 1
+    at.radio[0].set_value("Consumer").run()
+    at = click(at, "Test Unlicensed Purchase")
+    err = " ".join(e.value for e in at.error)
+    check("step 1 unlicensed purchase rejected", "Merchant is not licensed." in err, err)
+    check("step 1 says Transaction Reverted", "Transaction Reverted" in err, err)
 
     # ---------------------------------------------------------------- step 2
-    at.radio[0].set_value("Consumer").run()
-    at = click(at, "Buy Package")
-    check("step 2 package purchased", any("Package purchased" in s.value for s in at.success),
+    at.radio[0].set_value("Regulator").run()
+    at = click(at, "Register Merchant")
+    check("step 2 merchant registered", any("Merchant registered" in s.value for s in at.success),
           str([s.value for s in at.success]))
-    body = texts(at)
-    check("step 2 shows HK$6,000 protected", "HK$6,000" in body)
 
     # ---------------------------------------------------------------- step 3
+    at.radio[0].set_value("Consumer").run()
+    at = click(at, "Buy Package")
+    check("step 3 package purchased", any("Package purchased" in s.value for s in at.success),
+          str([s.value for s in at.success]))
+    body = texts(at)
+    check("step 3 shows HK$6,000 protected", "HK$6,000" in body)
+
+    # ---------------------------------------------------------------- step 4
     for i in range(3):
         at = click(at, "Use One Session")
-        check(f"step 3 session {i + 1} completed",
+        check(f"step 4 session {i + 1} completed",
               any("Session completed successfully." in s.value for s in at.success),
               str([s.value for s in at.success]))
-        check(f"step 3 session {i + 1} names the released amount",
+        check(f"step 4 session {i + 1} names the released amount",
               any("has been released to the merchant." in s.value for s in at.success),
               str([s.value for s in at.success]))
     body = texts(at)
-    check("step 3 shows 3 / 12 sessions", "3 / 12" in body, body[:300])
-    check("step 3 shows HK$1,500 released", "HK$1,500" in body)
-    check("step 3 shows HK$4,500 protected", "HK$4,500" in body)
+    check("step 4 shows 3 / 12 sessions", "3 / 12" in body, body[:300])
+    check("step 4 shows HK$1,500 released", "HK$1,500" in body)
+    check("step 4 shows HK$4,500 protected", "HK$4,500" in body)
 
-    # ---------------------------------------------------------------- step 4
+    # ---------------------------------------------------------------- step 5
     at.radio[0].set_value("Merchant").run()
     at = click(at, "Test Excess Withdrawal")
     err = " ".join(e.value for e in at.error)
-    check("step 4 excess withdrawal rejected", "Reserve funds are locked." in err, err)
-    check("step 4 explains why", "cannot withdraw unused consumer funds" in err, err)
-    check("step 4 says Transaction Reverted", "Transaction Reverted" in err, err)
-
-    # ---------------------------------------------------------------- step 5
-    at = click(at, "Withdraw Available Funds")
-    check("step 5 withdrawal succeeded",
-          any("Withdrawal successful" in s.value for s in at.success),
-          str([s.value for s in at.success]))
+    check("step 5 excess withdrawal rejected", "Reserve funds are locked." in err, err)
+    check("step 5 explains why", "cannot withdraw unused consumer funds" in err, err)
+    check("step 5 says Transaction Reverted", "Transaction Reverted" in err, err)
 
     # ---------------------------------------------------------------- step 6
+    at = click(at, "Withdraw Available Funds")
+    check("step 6 withdrawal succeeded",
+          any("Withdrawal successful" in s.value for s in at.success),
+          str([s.value for s in at.success]))
+    # The disabled caption must agree with "Withdrawn Amount HK$1,500" above it.
+    caps = captions(at)
+    check("step 6 button explains the money was taken out",
+          "has already been withdrawn" in caps, caps[:400])
+    check("step 6 does not claim nothing was released",
+          "Nothing has been released yet" not in caps, caps[:400])
+
+    # ---------------------------------------------------------------- step 7
     at.radio[0].set_value("Regulator").run()
     at = click(at, "Mark Merchant as Closed")
-    check("step 6 merchant closed",
+    check("step 7 merchant closed",
           any("marked as closed" in s.value for s in at.success),
           str([s.value for s in at.success]))
 
-    # ---------------------------------------------------------------- step 7
-    at = click(at, "Process Consumer Refund")
-    ok = " ".join(s.value for s in at.success)
-    check("step 7 refund succeeded", "refund processed successfully" in ok, ok)
-    check("step 7 refund amount HK$4,500", "HK$4,500" in ok, ok)
-
     # ---------------------------------------------------------------- step 8
     at = click(at, "Process Consumer Refund")
+    ok = " ".join(s.value for s in at.success)
+    check("step 8 refund succeeded", "refund processed successfully" in ok, ok)
+    check("step 8 refund amount HK$4,500", "HK$4,500" in ok, ok)
+    body = texts(at)
+    check("step 8 bar shows the refunded slice", "Refunded HK$4,500" in body, body[:400])
+    check("step 8 caption accounts for the whole HK$6,000",
+          "went back to the consumer" in body and "vault is empty" in body, body[:600])
+
+    # ---------------------------------------------------------------- step 9
+    at = click(at, "Process Consumer Refund")
     err = " ".join(e.value for e in at.error)
-    check("step 8 double refund rejected", "Refund has already been processed." in err, err)
+    check("step 9 double refund rejected", "Refund has already been processed." in err, err)
 
     # ---------------------------------------------------------------- log
     at.radio[0].set_value("Activity Log").run()
@@ -137,6 +170,13 @@ def main():
                      "Merchant withdrawal completed", "Merchant marked as closed",
                      "refunded to consumer"]:
         check(f"activity log contains '{expected}'", expected in log)
+
+    # Roles and addresses: a regulator event must not wear the counterparty's
+    # wallet, and every row must expose a transaction hash.
+    check("log names the regulator's counterparty", "Regulator → Merchant 0x" in log, log[:400])
+    check("log refund row points at the consumer", "Regulator → Consumer 0x" in log)
+    check("log never labels a bare address as Regulator", "Regulator 0x" not in log, log[:400])
+    check("log rows carry a transaction hash", log.count("Tx 0x") >= 8, str(log.count("Tx 0x")))
 
     # The demo ends on this page, so the newest event has to be at the top.
     log_rows = [m.value for m in at.markdown if 'class="ps-log"' in m.value]
