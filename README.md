@@ -216,6 +216,18 @@ Pages can also be opened directly: `http://localhost:8501/?page=Merchant`
 
 A word-for-word presenter script with timings is in [`docs/DEMO_SCRIPT.md`](docs/DEMO_SCRIPT.md).
 
+### Projector mode
+
+`client.toolbarMode = "viewer"` in `.streamlit/config.toml`, plus the CSS block at the top of
+`app.py`, remove Streamlit's own chrome from the screen: no Fork, no Deploy, no hamburger, no
+toolbar. Verified in a real browser at 1440×900.
+
+One thing the app cannot remove: on the Community Cloud link, the **hosting wrapper** draws two
+small buttons in the bottom-right corner (the "Built with Streamlit" badge and the owner's
+profile / manage-app button). They sit outside the app's iframe, so no CSS inside the app can
+reach them. Present locally (`localhost:8501`) if the frame has to be completely clean; otherwise
+they are inert during the demo.
+
 ### Reset before a live demo
 
 The demo ends in a terminal state (package closed, refund processed), and the chain keeps that

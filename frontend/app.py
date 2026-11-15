@@ -87,13 +87,6 @@ st.markdown(
       [data-testid="stToolbar"], [data-testid="stDecoration"], #MainMenu {
         display: none !important;
       }
-      /* Community Cloud also floats its own chrome in the bottom-right corner
-         (the "Built with Streamlit" viewer badge and the owner's profile /
-         manage-app button). It is injected outside the app's tree, so the only
-         handle is the hashed CSS-module class name. */
-      [class*="_viewerBadge_"], [class*="_profileContainer_"] {
-        display: none !important;
-      }
 
       /* Streamlit's header (menu / Share / star / edit) is a position:fixed
          overlay about 3.75rem tall. A small padding-top let it sit on top of
